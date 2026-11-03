@@ -2391,7 +2391,11 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
 
         self.params = params
         self._name = name or f"streamable_http: {self.params['url']}"
-        self._serialize_session_requests = True
+        # On MCP v1, one failed POST on the shared streamable-HTTP transport cancels
+        # sibling in-flight requests, so requests are serialized per session (#2682).
+        # On MCP v2 an HTTP error only fails that request, so independent requests can
+        # run concurrently (#5474).
+        self._serialize_session_requests = not MCP_V2
 
     def create_streams(
         self,
