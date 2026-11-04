@@ -66,7 +66,7 @@ AUDIT_LOG_PATH = EXAMPLE_DIR / ".audit_log.jsonl"
 _downloads_base_url: str = ""
 
 DEVELOPER_INSTRUCTIONS = (
-    (SCHEMA_DIR / "overview.md").read_text()
+    (SCHEMA_DIR / "overview.md").read_text(encoding="utf-8")
     + """
 
 ## Instructions
@@ -353,14 +353,16 @@ def _load_session_state() -> DaytonaSandboxSessionState | None:
     if not SESSION_STATE_PATH.exists():
         return None
     try:
-        return DaytonaSandboxSessionState.model_validate_json(SESSION_STATE_PATH.read_text())
+        return DaytonaSandboxSessionState.model_validate_json(
+            SESSION_STATE_PATH.read_text(encoding="utf-8")
+        )
     except Exception:
         return None
 
 
 def _save_session_state(state: DaytonaSandboxSessionState) -> None:
     """Persist session state to disk so the sandbox can be reused next run."""
-    SESSION_STATE_PATH.write_text(state.model_dump_json(indent=2))
+    SESSION_STATE_PATH.write_text(state.model_dump_json(indent=2), encoding="utf-8")
 
 
 def _require_env(name: str) -> None:

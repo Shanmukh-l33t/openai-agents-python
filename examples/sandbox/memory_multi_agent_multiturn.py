@@ -155,7 +155,7 @@ def _print_tree(
         if path.is_file():
             print(path.relative_to(root))
             if print_file_contents:
-                contents = path.read_text().rstrip()
+                contents = path.read_text(encoding="utf-8").rstrip()
                 if not contents:
                     print("    (empty)")
                 else:

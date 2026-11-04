@@ -101,7 +101,7 @@ async def main():
         state = result.to_state()
         state_json = state.to_json()
         RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with RESULT_PATH.open("w") as f:
+        with RESULT_PATH.open("w", encoding="utf-8") as f:
             json.dump(state_json, f, indent=2)
 
         print(f"State saved to {RESULT_PATH}")
@@ -110,7 +110,7 @@ async def main():
 
         # Reading state from file (demonstrating deserialization)
         print(f"Loading state from {RESULT_PATH}")
-        with RESULT_PATH.open() as f:
+        with RESULT_PATH.open(encoding="utf-8") as f:
             stored_state_json = json.load(f)
 
         state = await RunState.from_json(agent, stored_state_json)

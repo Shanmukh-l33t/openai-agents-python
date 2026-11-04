@@ -150,7 +150,7 @@ def _print_memory_tree(workspace_root: Path) -> None:
             for child in sorted(full_path.iterdir()):
                 print(f"  - {relative_path / child.name}")
                 if relative_path == Path("sessions"):
-                    contents = child.read_text().rstrip()
+                    contents = child.read_text(encoding="utf-8").rstrip()
                     if not contents:
                         print("    (empty)")
                     else:
@@ -159,7 +159,7 @@ def _print_memory_tree(workspace_root: Path) -> None:
             continue
 
         print(f"- {relative_path}")
-        print(full_path.read_text().rstrip() or "(empty)")
+        print(full_path.read_text(encoding="utf-8").rstrip() or "(empty)")
 
 
 def _run_config(*, sandbox: BaseSandboxSession, workflow_name: str) -> RunConfig:
