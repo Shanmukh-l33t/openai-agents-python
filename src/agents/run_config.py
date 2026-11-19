@@ -418,6 +418,17 @@ class RunConfig:
     tracing: TracingConfig | None = None
     """Tracing configuration for this run."""
 
+    persist_interrupted_tool_calls: bool = False
+    """Whether a cancelled run records a synthetic output for tool calls that were still in flight.
+
+    A settled call/output pair is always kept. A call with no output is dropped before the model
+    sees it (``drop_orphan_function_calls``), so leaving it out means the next turn silently loses
+    the fact that the call was made, and the model can repeat a side effect that may already have
+    happened. Enabling this writes one output per interrupted call stating that the call was
+    interrupted before its result was recorded. Default is False so existing session shapes do not
+    change.
+    """
+
     trace_include_sensitive_data: bool = field(
         default_factory=_default_trace_include_sensitive_data
     )

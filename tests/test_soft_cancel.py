@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from agents import Agent, Runner, SQLiteSession
+from agents import Agent, RunConfig, Runner, SQLiteSession
 from agents.agent_output import AgentOutputSchema
 from agents.decorators import tool
 from agents.stream_events import StreamEvent
@@ -778,6 +778,84 @@ async def test_cancelled_run_persists_completed_sibling_to_session():
         await Runner.run(agent, "carry on", session=session)
         assert model.last_call is not None
         assert _history_shape(model.last_call.input) == [*EXPECTED_CANCELLED_HISTORY, "user"]
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await session.clear_session()
+
+
+# both calls precede their outputs, which is the model-facing order the session keeps
+EXPECTED_INTERRUPTED_HISTORY = [
+    "user",
+    "function_call:done",
+    "function_call:inflight",
+    "function_call_output:done",
+    "function_call_output:inflight",
+]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_call_is_recorded_when_flag_enabled():
+    """With the opt-in flag, the in-flight call also gets a synthetic output.
+
+    A bare function_call is stripped by drop_orphan_function_calls before the model sees it, so
+    without the synthetic output the next turn cannot know the call was ever made.
+    """
+    ledger: list[str] = []
+    agent, model, completed, started = _cancelled_batch_agent(ledger)
+    session = SQLiteSession("cancel_batch_interrupted_flag")
+    await session.clear_session()
+    task = asyncio.create_task(
+        Runner.run(
+            agent,
+            "Refund ORD-1 and ORD-2",
+            session=session,
+            run_config=RunConfig(persist_interrupted_tool_calls=True),
+        )
+    )
+    try:
+        await _wait_for_batch(completed, started)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert _history_shape(await session.get_items()) == EXPECTED_INTERRUPTED_HISTORY
+        await Runner.run(
+            agent,
+            "carry on",
+            session=session,
+            run_config=RunConfig(persist_interrupted_tool_calls=True),
+        )
+        assert model.last_call is not None
+        assert _history_shape(model.last_call.input) == [*EXPECTED_INTERRUPTED_HISTORY, "user"]
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await session.clear_session()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_call_flag_off_changes_nothing():
+    """Default config keeps the settled-only shape, so the flag is strictly opt-in."""
+    ledger: list[str] = []
+    agent, _model, completed, started = _cancelled_batch_agent(ledger)
+    session = SQLiteSession("cancel_batch_interrupted_default")
+    await session.clear_session()
+    task = asyncio.create_task(
+        Runner.run(
+            agent,
+            "Refund ORD-1 and ORD-2",
+            session=session,
+            run_config=RunConfig(persist_interrupted_tool_calls=False),
+        )
+    )
+    try:
+        await _wait_for_batch(completed, started)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert _history_shape(await session.get_items()) == EXPECTED_CANCELLED_HISTORY
     finally:
         if not task.done():
             task.cancel()

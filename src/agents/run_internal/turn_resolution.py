@@ -898,6 +898,51 @@ def _snapshot_tool_outputs(items: list[RunItem], live_outputs: list[RunItem]) ->
     return snapshots
 
 
+_INTERRUPTED_TOOL_OUTPUT = (
+    "Tool call interrupted: the run was cancelled before this call returned a result, so its "
+    "outcome is unknown. Do not assume it failed; verify before repeating any side effect."
+)
+
+
+def _interrupted_tool_output_items(
+    agent: Any, pre_step_items: list[RunItem], retained_items: list[RunItem]
+) -> list[RunItem]:
+    """Synthesize an output for every call left in flight when a run is cancelled.
+
+    A call written without its output is stripped by ``drop_orphan_function_calls`` before the
+    model sees it, so omitting the interrupted call would hide it from the next turn and invite a
+    duplicate side effect. Gated by ``RunConfig.persist_interrupted_tool_calls``.
+    """
+    settled_call_ids = {
+        extract_tool_call_id(item.raw_item)
+        for item in retained_items
+        if isinstance(item, ToolCallOutputItem)
+    }
+    synthetic: list[RunItem] = []
+    for item in pre_step_items:
+        if not isinstance(item, ToolCallItem):
+            continue
+        call_id = extract_tool_call_id(item.raw_item)
+        if call_id is None or call_id in settled_call_ids:
+            continue
+        settled_call_ids.add(call_id)
+        synthetic.append(
+            ToolCallOutputItem(
+                agent=agent,
+                output=_INTERRUPTED_TOOL_OUTPUT,
+                raw_item=cast(
+                    Any,
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": _INTERRUPTED_TOOL_OUTPUT,
+                    },
+                ),
+            )
+        )
+    return synthetic
+
+
 def _completed_tool_step_items(
     pre_step_items: list[RunItem], model_items: list[RunItem], outputs: list[RunItem]
 ) -> list[RunItem]:
@@ -1072,6 +1117,14 @@ async def execute_tools_and_side_effects(
                 _completed_tool_step_items(pre_step_items, new_step_items, completed_outputs),
                 [item for item in completed_outputs if id(item) not in model_item_ids],
             )
+            if retained_items and getattr(run_config, "persist_interrupted_tool_calls", False):
+                retained_items = _completed_tool_step_items(
+                    pre_step_items,
+                    new_step_items,
+                    retained_items + _interrupted_tool_output_items(
+                        public_agent, new_step_items, retained_items
+                    ),
+                )
             if retained_items:
                 on_tool_execution_error(
                     SingleStepResult(
