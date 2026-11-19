@@ -231,9 +231,7 @@ async def test_completed_history_at_failure_boundaries(streaming: bool, boundary
                 await asyncio.wait_for(task, 2)
             caught = exc.value
         expected = (
-            []
-            if boundary == "parent_cancel"
-            else ["web_search_call"]
+            ["web_search_call"]
             if boundary in ("provider", "provider_final_hook")
             else ["shell_call:shell", "shell_call_output:shell"]
             if boundary == "provider_shell"
@@ -244,7 +242,14 @@ async def test_completed_history_at_failure_boundaries(streaming: bool, boundary
             assert caught.run_data is not None
             assert _shape([item.to_input_item() for item in caught.run_data.new_items]) == expected
         if result is not None:
-            assert _shape(output_events) == [item for item in expected if "output:" in item]
+            # A cancelled stream is torn down, so a settled output is persisted without being
+            # replayed to the closed consumer queue.
+            replayed = (
+                []
+                if boundary == "parent_cancel"
+                else [item for item in expected if "output:" in item]
+            )
+            assert _shape(output_events) == replayed
             assert _shape(result.to_input_list())[1:] == expected
             if boundary != "parent_cancel":
                 restored = await RunState.from_json(agent, result.to_state().to_json())

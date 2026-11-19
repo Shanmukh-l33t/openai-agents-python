@@ -1919,10 +1919,6 @@ class AgentRunner:
                                 on_tool_execution_error=partial_tool_results.append,
                             )
                     except (Exception, asyncio.CancelledError) as error:
-                        if isinstance(
-                            error, asyncio.CancelledError
-                        ) and not _is_tool_local_cancellation(error):
-                            raise
                         if not partial_tool_results:
                             if isinstance(error, _ToolTaskCancellation):
                                 raise error.error from None

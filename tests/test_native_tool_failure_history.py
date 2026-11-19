@@ -262,7 +262,12 @@ async def test_native_finalization_preserves_output_without_delaying_parent(monk
         assert effects == ["custom"]
         saved = await session.get_items()
         if stop == "parent_cancel":
-            assert [item.get("role") for item in saved] == ["user"]
+            # A cancelled run keeps the custom tool call and output that already settled.
+            assert saved[0]["role"] == "user"
+            assert [(item.get("type"), item.get("call_id")) for item in saved[1:]] == [
+                ("custom_tool_call", "native"),
+                ("custom_tool_call_output", "native"),
+            ]
         else:
             assert saved[-1]["output"] == "completed"
     finally:

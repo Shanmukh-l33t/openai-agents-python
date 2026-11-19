@@ -3,14 +3,15 @@
 import asyncio
 import json
 from collections.abc import AsyncGenerator
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from agents import Agent, Runner, SQLiteSession
 from agents.agent_output import AgentOutputSchema
+from agents.decorators import tool
 from agents.stream_events import StreamEvent
-from agents.testing import ScriptedModel
+from agents.testing import ScriptedModel, assistant_message, function_call
 
 from .test_responses import (
     get_function_tool,
@@ -703,3 +704,133 @@ async def test_soft_cancel_with_session_and_multiple_turns():
 
     # Cleanup
     await session.clear_session()
+
+
+def _history_shape(items: list[Any]) -> list[str]:
+    return [
+        f"{item['type']}:{item['call_id']}"
+        if "call_id" in item
+        else str(item.get("role", item.get("type", "?")))
+        for item in items
+    ]
+
+
+def _cancelled_batch_agent(
+    ledger: list[str],
+) -> tuple[Agent[Any], ScriptedModel, asyncio.Event, asyncio.Event]:
+    """Build an agent whose batch has one finished tool and one in-flight tool."""
+    completed = asyncio.Event()
+    started = asyncio.Event()
+
+    @tool
+    async def pay_refund(order_id: str) -> str:
+        ledger.append(order_id)
+        if order_id == "ORD-1":
+            completed.set()
+            return "refunded ORD-1"
+        started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    agent = Agent(
+        name="refunds",
+        model=ScriptedModel(
+            [
+                [
+                    function_call("pay_refund", {"order_id": "ORD-1"}, call_id="done"),
+                    function_call("pay_refund", {"order_id": "ORD-2"}, call_id="inflight"),
+                ],
+                [assistant_message("Turn 2 saw history.")],
+            ]
+        ),
+        tools=[pay_refund],
+    )
+    return agent, cast(ScriptedModel, agent.model), completed, started
+
+
+async def _wait_for_batch(completed: asyncio.Event, started: asyncio.Event) -> None:
+    await asyncio.wait_for(completed.wait(), timeout=5)
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+
+EXPECTED_CANCELLED_HISTORY = [
+    "user",
+    "function_call:done",
+    "function_call_output:done",
+]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_persists_completed_sibling_to_session():
+    """An outer cancel must keep the tool call and output that already completed."""
+    ledger: list[str] = []
+    agent, model, completed, started = _cancelled_batch_agent(ledger)
+    session = SQLiteSession("cancel_batch_nonstreamed")
+    await session.clear_session()
+    task = asyncio.create_task(Runner.run(agent, "Refund ORD-1 and ORD-2", session=session))
+    try:
+        await _wait_for_batch(completed, started)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert ledger == ["ORD-1", "ORD-2"]
+        assert _history_shape(await session.get_items()) == EXPECTED_CANCELLED_HISTORY
+        await Runner.run(agent, "carry on", session=session)
+        assert model.last_call is not None
+        assert _history_shape(model.last_call.input) == [*EXPECTED_CANCELLED_HISTORY, "user"]
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await session.clear_session()
+
+
+@pytest.mark.asyncio
+async def test_timeout_persists_completed_sibling_to_session():
+    """A timeout cancel must keep the tool call and output that already completed."""
+    ledger: list[str] = []
+    agent, _model, completed, started = _cancelled_batch_agent(ledger)
+    session = SQLiteSession("cancel_batch_timeout")
+    await session.clear_session()
+    task = asyncio.create_task(Runner.run(agent, "Refund ORD-1 and ORD-2", session=session))
+    try:
+        await _wait_for_batch(completed, started)
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.05):
+                await task
+        assert _history_shape(await session.get_items()) == EXPECTED_CANCELLED_HISTORY
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await session.clear_session()
+
+
+@pytest.mark.asyncio
+async def test_immediate_cancel_persists_completed_sibling_to_session():
+    """Immediate streaming cancel must keep the tool call and output that already completed."""
+    ledger: list[str] = []
+    agent, model, completed, started = _cancelled_batch_agent(ledger)
+    session = SQLiteSession("cancel_batch_streamed")
+    await session.clear_session()
+    result = Runner.run_streamed(agent, "Refund ORD-1 and ORD-2", session=session)
+
+    async def consume() -> None:
+        async for _ in result.stream_events():
+            pass
+
+    consumer = asyncio.create_task(consume())
+    try:
+        await _wait_for_batch(completed, started)
+        result.cancel(mode="immediate")
+        await asyncio.wait_for(consumer, timeout=5)
+        assert ledger == ["ORD-1", "ORD-2"]
+        assert _history_shape(await session.get_items()) == EXPECTED_CANCELLED_HISTORY
+        await Runner.run(agent, "carry on", session=session)
+        assert model.last_call is not None
+        assert _history_shape(model.last_call.input) == [*EXPECTED_CANCELLED_HISTORY, "user"]
+    finally:
+        if not consumer.done():
+            consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+        await session.clear_session()

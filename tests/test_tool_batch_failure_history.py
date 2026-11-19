@@ -798,9 +798,10 @@ async def test_nonstreamed_partial_history_waits_for_input_verdict(monkeypatch, 
                     == expected
                 )
         assert guardrail_exited.is_set()
+        # A cancel that lands after the input verdict was accepted keeps the settled pair.
         expected = (
             ["function_call:done", "function_call_output:done"]
-            if verdict in ("pass", "tool_cancel")
+            if verdict in ("pass", "tool_cancel", "cancel_at_verdict")
             else []
         )
         assert _shape(await session.get_items()) == ["user", *expected]

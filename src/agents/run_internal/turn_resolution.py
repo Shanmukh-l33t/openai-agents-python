@@ -71,7 +71,6 @@ from ..exceptions import (
     UserError,
     _detach_data_redacted_error_traceback,
     _is_error_data_redacted,
-    _is_tool_local_cancellation,
     _mark_error_data_redacted,
 )
 from ..handoffs import Handoff, HandoffInputData, HandoffInputFilter, nest_handoff_history
@@ -1109,9 +1108,10 @@ async def execute_tools_and_side_effects(
             tool_input_guardrail_results=tool_input_guardrail_results,
             tool_output_guardrail_results=tool_output_guardrail_results,
         )
-    except (Exception, asyncio.CancelledError) as error:
-        if not isinstance(error, asyncio.CancelledError) or _is_tool_local_cancellation(error):
-            _publish_completed_tools()
+    except (Exception, asyncio.CancelledError):
+        # Publish every settled call/output pair before the error leaves this turn.
+        # An outer cancellation loses the same completed work as a tool-local failure.
+        _publish_completed_tools()
         raise
 
     new_step_items.extend(
